@@ -1,5 +1,5 @@
-var mysql = require("mysql");
-var inquirer = require("inquirer");
+var mysql = require("mysql2");
+var inquirer = require("inquirer").default;
 var Table = require("cli-table");
 var fs = require("fs");
  
@@ -17,11 +17,12 @@ var table = new Table({
 
 
 var connection = mysql.createConnection ({
-	host: "localhost",
-	port: 8889,
-	user: "root",
-	password: "root",
-	database: "bamazon_DB"
+	// Defaults match a local MAMP install; override them with environment variables.
+	host: process.env.DB_HOST || "localhost",
+	port: Number(process.env.DB_PORT) || 8889,
+	user: process.env.DB_USER || "root",
+	password: process.env.DB_PASSWORD || "root",
+	database: process.env.DB_NAME || "bamazon_DB"
 });
 
 connection.connect(function(err) {
@@ -65,32 +66,36 @@ function buyItem(inventory) {
 				name: "itemQuantity"
 			}
 		]).then(function(response) {
-			var itemID = response.itemId - 1;
-			if (inventory[itemID].stock_quantity < response.itemQuantity) {
-				console.log("Sorry we don't have the sufficient quantity to fulfill your order");
-				keepShopping();
+			var itemId = Number(response.itemId);
+			var quantity = Number(response.itemQuantity);
+			var item = inventory.find(function(product) {
+				return product.item_id === itemId;
+			});
+			if (!item) {
+				console.log("There is no product with that id.");
+				return keepShopping();
 			}
-			else {
-				var query = connection.query(
-				    "UPDATE products SET ? WHERE ?",
-				    [
-				      {
-				        stock_quantity: (inventory[itemID].stock_quantity - response.itemQuantity)
-				      },
-				      {
-				        item_id: inventory[itemID].item_id
-				      }
-				    ],
-				    function(err, res) {
-				    	if (err) throw (err);
-				      	console.log("\n\nTransaction successfull");
-				      	console.log("Total was $" + (inventory[itemID].price * response.itemQuantity).toFixed(2));
-				      	keepShopping();
-				    }
-				 );
+			if (!Number.isInteger(quantity) || quantity < 1) {
+				console.log("Please enter a whole number greater than zero.");
+				return keepShopping();
 			}
+			// The stock check runs in the UPDATE itself, so two shoppers can't
+			// both buy the last unit.
+			connection.query(
+				"UPDATE products SET stock_quantity = stock_quantity - ? WHERE item_id = ? AND stock_quantity >= ?",
+				[quantity, itemId, quantity],
+				function(err, res) {
+					if (err) throw (err);
+					if (res.affectedRows === 0) {
+						console.log("Sorry we don't have the sufficient quantity to fulfill your order");
+					} else {
+						console.log("\n\nTransaction successful");
+						console.log("Total was $" + (item.price * quantity).toFixed(2));
+					}
+					keepShopping();
+				}
+			);
 		});
-				
 }
 
 function keepShopping() {
